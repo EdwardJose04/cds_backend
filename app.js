@@ -14,8 +14,8 @@ app.use(express.json());
 // Rutas Base
 app.use('/api/usuarios', require('./routes/usuarios.routes'));
 app.use('/api/herramientas', require('./routes/herramientas.routes'));
-/* app.use('/api/productos', require('./routes/productos.routes'));
-app.use('/api/prestamos', require('./routes/prestamos.routes'));
+ app.use('/api/productos', require('./routes/productos.routes'));
+/* app.use('/api/prestamos', require('./routes/prestamos.routes'));
 app.use('/api/reportes', require('./routes/reportes.routes')); */
 
 // Manejo de errores global
