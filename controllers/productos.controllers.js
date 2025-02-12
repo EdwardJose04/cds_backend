@@ -32,31 +32,18 @@ const productosController = {
             const {
                 nombre,
                 cantidad,
-                codigo,
                 responsable
             } = req.body;
 
             // Validaciones básicas
-            if (!nombre || !cantidad || !codigo || !responsable) {
+            if (!nombre || !cantidad || !responsable) {
                 return res.status(400).json({ message: 'Todos los campos son obligatorios' });
-            }
-
-            // Verificar si el código ya existe
-            const [existingProducts] = await promisePool.query(
-                'SELECT * FROM productos WHERE codigo = ?',
-                [codigo]
-            );
-
-            if (existingProducts.length > 0) {
-                return res.status(400).json({
-                    message: 'Ya existe un producto con este código'
-                });
             }
 
             // Insertar nuevo producto
             const [result] = await promisePool.query(
-                'INSERT INTO productos (nombre, cantidad, codigo, responsable) VALUES (?, ?, ?, ?)',
-                [nombre, cantidad, codigo, responsable]
+                'INSERT INTO productos (nombre, cantidad, responsable) VALUES (?, ?, ?)',
+                [nombre, cantidad, responsable]
             );
 
             res.status(201).json({
@@ -141,30 +128,17 @@ const productosController = {
             const {
                 nombre,
                 cantidad,
-                codigo,
                 responsable
             } = req.body;
 
             // Validaciones básicas
-            if (!nombre || !cantidad || !codigo || !responsable) {
+            if (!nombre || !cantidad || !responsable) {
                 return res.status(400).json({ message: 'Todos los campos son obligatorios' });
             }
 
-            // Verificar si el código ya existe en otro producto
-            const [existingProducts] = await promisePool.query(
-                'SELECT * FROM productos WHERE codigo = ? AND id != ?',
-                [codigo, id]
-            );
-
-            if (existingProducts.length > 0) {
-                return res.status(400).json({
-                    message: 'Ya existe otro producto con este código'
-                });
-            }
-
             const [result] = await promisePool.query(
-                'UPDATE productos SET nombre = ?, cantidad = ?, codigo = ?, responsable = ? WHERE id = ?',
-                [nombre, cantidad, codigo, responsable, id]
+                'UPDATE productos SET nombre = ?, cantidad = ?, responsable = ? WHERE id = ?',
+                [nombre, cantidad, responsable, id]
             );
 
             if (result.affectedRows === 0) {
@@ -173,7 +147,7 @@ const productosController = {
 
             res.status(200).json({
                 message: 'Producto actualizado exitosamente',
-                producto: { id, nombre, cantidad, codigo, responsable }
+                producto: { id, nombre, cantidad, responsable }
             });
 
         } catch (error) {
