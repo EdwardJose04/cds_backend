@@ -13,7 +13,6 @@ const verificarToken = (req) => {
 };
 
 const prestamosController = {
-    // Nuevo método para generar número de ticket
     generarNumeroTicket: async (req, res) => {
         try {
             verificarToken(req);
@@ -46,54 +45,81 @@ const prestamosController = {
     },
 
     crearPrestamo: async (req, res) => {
+        const connection = await promisePool.getConnection();
         try {
-            console.log('Datos recibidos:', req.body);
+            await connection.beginTransaction();
             
             const usuarioDecodificado = verificarToken(req);
-            const { herramienta_id, responsable, lugar_uso, numero_ticket } = req.body;
+            const { herramienta_id, cantidad, responsable, lugar_uso, numero_ticket } = req.body;
     
-            // Validación explícita del numero_ticket
-            if (!numero_ticket || numero_ticket.trim() === '') {
+            // Validaciones
+            if (!numero_ticket?.trim() || !herramienta_id || !cantidad || !responsable?.trim() || !lugar_uso?.trim()) {
                 return res.status(400).json({ 
-                    message: 'El número de ticket es obligatorio',
+                    message: 'Todos los campos son obligatorios',
+                    receivedData: req.body 
+                });
+            }
+
+            if (cantidad <= 0) {
+                return res.status(400).json({ 
+                    message: 'La cantidad debe ser mayor a 0',
                     receivedData: req.body 
                 });
             }
     
-            // Resto de validaciones
-            if (!herramienta_id || !responsable || !lugar_uso) {
-                return res.status(400).json({ message: 'Todos los campos son obligatorios' });
-            }
-    
-            // Convertir herramienta_id a número si es necesario
-            const herramientaId = parseInt(herramienta_id);
-    
             // Verificar disponibilidad de la herramienta
-            const [herramienta] = await promisePool.query(
-                'SELECT * FROM herramientas WHERE id = ? AND estado = "En inventario"',
-                [herramientaId]
+            const [herramienta] = await connection.query(
+                'SELECT id, cantidad, nombre_herramienta FROM herramientas WHERE id = ?',
+                [herramienta_id]
             );
     
             if (herramienta.length === 0) {
-                return res.status(400).json({ message: 'Herramienta no disponible' });
+                await connection.rollback();
+                return res.status(404).json({ message: 'Herramienta no encontrada' });
+            }
+
+            // Verificar si hay suficiente stock
+            if (herramienta[0].cantidad < cantidad) {
+                await connection.rollback();
+                return res.status(400).json({ 
+                    message: `Stock insuficiente. Stock actual: ${herramienta[0].cantidad}` 
+                });
             }
     
-            // Realizar la inserción con valores explícitamente convertidos
-            const [result] = await promisePool.query(
-                'INSERT INTO prestamos (numero_ticket, herramienta_id, responsable, lugar_uso) VALUES (?, ?, ?, ?)',
-                [numero_ticket.trim(), herramientaId, responsable.trim(), lugar_uso.trim()]
+            // Registrar el préstamo
+            const [result] = await connection.query(
+                'INSERT INTO prestamos (numero_ticket, herramienta_id, cantidad, responsable, lugar_uso) VALUES (?, ?, ?, ?, ?)',
+                [numero_ticket.trim(), herramienta_id, cantidad, responsable.trim(), lugar_uso.trim()]
             );
     
-            // Actualizar estado de la herramienta
-            await promisePool.query(
-                'UPDATE herramientas SET estado = "En prestamo" WHERE id = ?',
-                [herramientaId]
+            // Actualizar el stock de la herramienta
+            await connection.query(
+                'UPDATE herramientas SET cantidad = cantidad - ? WHERE id = ?',
+                [cantidad, herramienta_id]
             );
+
+            // Verificar si se agotó el stock
+            const [stockActualizado] = await connection.query(
+                'SELECT cantidad FROM herramientas WHERE id = ?',
+                [herramienta_id]
+            );
+
+            if (stockActualizado[0].cantidad === 0) {
+                await connection.query(
+                    'UPDATE herramientas SET estado = "No disponible" WHERE id = ?',
+                    [herramienta_id]
+                );
+            }
     
-            const [nuevoPrestamo] = await promisePool.query(
-                'SELECT p.*, h.nombre_herramienta FROM prestamos p JOIN herramientas h ON p.herramienta_id = h.id WHERE p.id = ?',
+            const [nuevoPrestamo] = await connection.query(`
+                SELECT p.*, h.nombre_herramienta 
+                FROM prestamos p 
+                JOIN herramientas h ON p.herramienta_id = h.id 
+                WHERE p.id = ?`,
                 [result.insertId]
             );
+
+            await connection.commit();
     
             res.status(201).json({
                 message: 'Préstamo registrado exitosamente',
@@ -101,16 +127,18 @@ const prestamosController = {
             });
     
         } catch (error) {
+            await connection.rollback();
             console.error('Error detallado en crearPrestamo:', error);
             console.error('Stack trace:', error.stack);
             
-            // Mejorar el mensaje de error
             res.status(500).json({
                 message: 'Error en el registro de préstamo',
                 error: error.message,
                 details: error.stack,
-                receivedData: req.body // Agregar datos recibidos para debugging
+                receivedData: req.body
             });
+        } finally {
+            connection.release();
         }
     },
 
@@ -168,37 +196,43 @@ const prestamosController = {
     },
 
     eliminarPrestamo: async (req, res) => {
+        const connection = await promisePool.getConnection();
         try {
+            await connection.beginTransaction();
             verificarToken(req);
             const { id } = req.params;
 
-            // Verificar que el préstamo existe
-            const [prestamo] = await promisePool.query(
-                'SELECT * FROM prestamos WHERE id = ?',
+            // Obtener información del préstamo
+            const [prestamo] = await connection.query(
+                'SELECT herramienta_id, cantidad FROM prestamos WHERE id = ?',
                 [id]
             );
 
             if (prestamo.length === 0) {
+                await connection.rollback();
                 return res.status(404).json({ message: 'Préstamo no encontrado' });
             }
 
-            // Actualizar el estado de la herramienta antes de eliminar el préstamo
-            await promisePool.query(
-                'UPDATE herramientas SET estado = "En inventario" WHERE id = ?',
-                [prestamo[0].herramienta_id]
+            // Actualizar el stock de la herramienta
+            await connection.query(
+                'UPDATE herramientas SET cantidad = cantidad + ?, estado = "En inventario" WHERE id = ?',
+                [prestamo[0].cantidad, prestamo[0].herramienta_id]
             );
 
             // Eliminar el préstamo
-            await promisePool.query(
+            await connection.query(
                 'DELETE FROM prestamos WHERE id = ?',
                 [id]
             );
+
+            await connection.commit();
 
             res.status(200).json({
                 message: 'Préstamo eliminado exitosamente'
             });
 
         } catch (error) {
+            await connection.rollback();
             if (error.message === 'Token no proporcionado' || error.message === 'Token inválido') {
                 return res.status(401).json({ message: error.message });
             }
@@ -207,6 +241,8 @@ const prestamosController = {
                 message: 'Error al eliminar préstamo',
                 error: error.message
             });
+        } finally {
+            connection.release();
         }
     }
 };
