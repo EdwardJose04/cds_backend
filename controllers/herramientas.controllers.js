@@ -19,10 +19,8 @@ const verificarToken = (req) => {
 const herramientasController = {
     crearHerramienta: async (req, res) => {
         try {
-            // Verificar token
             const usuarioDecodificado = verificarToken(req);
 
-            // Solo administradores pueden crear herramientas
             if (usuarioDecodificado.rol !== 'Administrador') {
                 return res.status(403).json({
                     message: 'No tienes permiso para registrar herramientas'
@@ -32,19 +30,34 @@ const herramientasController = {
             const {
                 responsable,
                 nombre_herramienta,
-                cantidad,
-                estado
+                cantidad_total,
+                cantidad_prestamo = 0
             } = req.body;
 
-            // Validaciones básicas
-            if (!responsable || !nombre_herramienta || !cantidad) {
-                return res.status(400).json({ message: 'Los campos responsable, nombre_herramienta y cantidad son obligatorios' });
+            if (!responsable || !nombre_herramienta || !cantidad_total) {
+                return res.status(400).json({ 
+                    message: 'Los campos responsable, nombre_herramienta y cantidad_total son obligatorios' 
+                });
             }
 
-            // Insertar nueva herramienta
+            // Validar que cantidad_prestamo no sea mayor que cantidad_total
+            if (cantidad_prestamo > cantidad_total) {
+                return res.status(400).json({
+                    message: 'La cantidad en préstamo no puede ser mayor que la cantidad total'
+                });
+            }
+
+            const cantidad_disponible = cantidad_total - cantidad_prestamo;
+
             const [result] = await promisePool.query(
-                'INSERT INTO herramientas (responsable, nombre_herramienta, cantidad, estado) VALUES (?, ?, ?, ?)',
-                [responsable, nombre_herramienta, cantidad, estado || 'En inventario']
+                `INSERT INTO herramientas (
+                    responsable, 
+                    nombre_herramienta, 
+                    cantidad_total,
+                    cantidad_disponible,
+                    cantidad_prestamo
+                ) VALUES (?, ?, ?, ?, ?)`,
+                [responsable, nombre_herramienta, cantidad_total, cantidad_disponible, cantidad_prestamo]
             );
 
             res.status(201).json({
@@ -66,12 +79,20 @@ const herramientasController = {
 
     listarHerramientas: async (req, res) => {
         try {
-            // Verificar token
             verificarToken(req);
 
             const [herramientas] = await promisePool.query(
-                'SELECT * FROM herramientas'
+                `SELECT 
+                    id,
+                    responsable,
+                    nombre_herramienta,
+                    cantidad_total,
+                    cantidad_disponible,
+                    cantidad_prestamo,
+                    fecha_ingreso
+                FROM herramientas`
             );
+
             res.status(200).json(herramientas);
         } catch (error) {
             if (error.message === 'Token no proporcionado' || error.message === 'Token inválido') {
@@ -87,12 +108,20 @@ const herramientasController = {
 
     obtenerHerramienta: async (req, res) => {
         try {
-            // Verificar token
             verificarToken(req);
 
             const { id } = req.params;
             const [herramientas] = await promisePool.query(
-                'SELECT * FROM herramientas WHERE id = ?',
+                `SELECT 
+                    id,
+                    responsable,
+                    nombre_herramienta,
+                    cantidad_total,
+                    cantidad_disponible,
+                    cantidad_prestamo,
+                    fecha_ingreso
+                FROM herramientas 
+                WHERE id = ?`,
                 [id]
             );
 
@@ -113,63 +142,10 @@ const herramientasController = {
         }
     },
 
-    actualizarHerramienta: async (req, res) => {
-        try {
-            // Verificar token
-            const usuarioDecodificado = verificarToken(req);
-
-            // Solo administradores pueden actualizar herramientas
-            if (usuarioDecodificado.rol !== 'Administrador') {
-                return res.status(403).json({
-                    message: 'No tienes permiso para actualizar herramientas'
-                });
-            }
-
-            const { id } = req.params;
-            const {
-                responsable,
-                nombre_herramienta,
-                cantidad,
-                estado
-            } = req.body;
-
-            // Validaciones básicas
-            if (!responsable || !nombre_herramienta || !cantidad) {
-                return res.status(400).json({ message: 'Los campos responsable, nombre_herramienta y cantidad son obligatorios' });
-            }
-
-            const [result] = await promisePool.query(
-                'UPDATE herramientas SET responsable = ?, nombre_herramienta = ?, cantidad = ?, estado = ? WHERE id = ?',
-                [responsable, nombre_herramienta, cantidad, estado || 'En inventario', id]
-            );
-
-            if (result.affectedRows === 0) {
-                return res.status(404).json({ message: 'Herramienta no encontrada' });
-            }
-
-            res.status(200).json({
-                message: 'Herramienta actualizada exitosamente',
-                herramienta: { id, responsable, nombre_herramienta, cantidad, estado }
-            });
-
-        } catch (error) {
-            if (error.message === 'Token no proporcionado' || error.message === 'Token inválido') {
-                return res.status(401).json({ message: error.message });
-            }
-            console.error('Error en actualización de herramienta:', error);
-            res.status(500).json({
-                message: 'Error en la actualización de herramienta',
-                error: error.message
-            });
-        }
-    },
-
     eliminarHerramienta: async (req, res) => {
         try {
-            // Verificar token
             const usuarioDecodificado = verificarToken(req);
 
-            // Solo administradores pueden eliminar herramientas
             if (usuarioDecodificado.rol !== 'Administrador') {
                 return res.status(403).json({
                     message: 'No tienes permiso para eliminar herramientas'
@@ -178,14 +154,26 @@ const herramientasController = {
 
             const { id } = req.params;
 
+            // Verificar si la herramienta tiene cantidad en préstamo
+            const [herramienta] = await promisePool.query(
+                'SELECT cantidad_prestamo FROM herramientas WHERE id = ?',
+                [id]
+            );
+
+            if (herramienta.length === 0) {
+                return res.status(404).json({ message: 'Herramienta no encontrada' });
+            }
+
+            if (herramienta[0].cantidad_prestamo > 0) {
+                return res.status(400).json({
+                    message: 'No se puede eliminar una herramienta que tiene unidades en préstamo'
+                });
+            }
+
             const [result] = await promisePool.query(
                 'DELETE FROM herramientas WHERE id = ?',
                 [id]
             );
-
-            if (result.affectedRows === 0) {
-                return res.status(404).json({ message: 'Herramienta no encontrada' });
-            }
 
             res.status(200).json({
                 message: 'Herramienta eliminada exitosamente'
